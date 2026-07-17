@@ -1,0 +1,18 @@
+{
+  "name": "website-security-auditor",
+  "version": "1.0.0",
+  "description": "Passive website security auditor (headers, TLS, cookies, content) restricted to a hardcoded domain allowlist",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node --test tests/**/*.test.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "axios": "^1.7.7",
+    "cheerio": "^1.0.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
