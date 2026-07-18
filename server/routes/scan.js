@@ -18,7 +18,11 @@ const { checkHeaders } = require('../services/headerCheck');
 const { checkTls } = require('../services/tlsCheck');
 const { checkCookies } = require('../services/cookieCheck');
 const { checkContent } = require('../services/contentCheck');
+const { checkCors } = require('../services/corsCheck');
+const { checkDns } = require('../services/dnsCheck');
+const { checkExposures } = require('../services/exposureCheck');
 const { scoreScan } = require('../services/scoring');
+const { generateReportPdf } = require('../services/pdfReport');
 
 const router = express.Router();
 
@@ -28,70 +32,115 @@ router.get('/allowed-domains', (req, res) => {
   res.json({ domains: ALLOWED_DOMAINS });
 });
 
-router.post('/scan', async (req, res) => {
-  const { url: targetUrl } = req.body || {};
-
+function validateAndAuthorize(targetUrl) {
   if (!targetUrl || typeof targetUrl !== 'string') {
-    return res.status(400).json({ error: 'Request body must include a "url" string.' });
+    return { error: { status: 400, body: { error: 'Request body must include a "url" string.' } } };
   }
 
   let parsed;
   try {
     parsed = new URL(targetUrl);
   } catch {
-    return res.status(400).json({ error: 'That is not a valid URL.' });
+    return { error: { status: 400, body: { error: 'That is not a valid URL.' } } };
   }
 
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    return res.status(400).json({ error: 'Only http:// and https:// URLs are supported.' });
+    return { error: { status: 400, body: { error: 'Only http:// and https:// URLs are supported.' } } };
   }
 
   // --- THE AUTHORIZATION GATE ---
   if (!isAuthorized(parsed.hostname)) {
-    return res.status(403).json({
-      error: `"${parsed.hostname}" is not on the authorized scan list.`,
-      hint: 'This tool only scans domains the operator has explicitly allowlisted in server/config/allowlist.js. See /api/allowed-domains for the current list.',
-    });
+    return {
+      error: {
+        status: 403,
+        body: {
+          error: `"${parsed.hostname}" is not on the authorized scan list.`,
+          hint: 'This tool only scans domains the operator has explicitly allowlisted in server/config/allowlist.js. See /api/allowed-domains for the current list.',
+        },
+      },
+    };
   }
 
+  return { parsed };
+}
+
+async function runScan(parsed) {
   const scanStart = Date.now();
-  try {
-    const response = await fetchPage(parsed.href);
-    const html = typeof response.data === 'string' ? response.data : '';
+  const response = await fetchPage(parsed.href);
+  const html = typeof response.data === 'string' ? response.data : '';
 
-    const headerResults = checkHeaders(response.headers || {});
-    const tlsResults = parsed.protocol === 'https:'
-      ? await checkTls(parsed.hostname)
-      : { error: 'Site was loaded over plain HTTP - no TLS to inspect. Serving the site over HTTPS is itself a high-severity recommendation.' };
-    const cookieResults = checkCookies(response.headers['set-cookie']);
-    const contentResults = checkContent(html, parsed.href);
+  const [tlsResults, corsResults, dnsResults, exposureResults] = await Promise.all([
+    parsed.protocol === 'https:'
+      ? checkTls(parsed.hostname)
+      : Promise.resolve({ error: 'Site was loaded over plain HTTP - no TLS to inspect. Serving the site over HTTPS is itself a high-severity recommendation.' }),
+    checkCors(parsed.href),
+    checkDns(parsed.hostname),
+    checkExposures(parsed.origin),
+  ]);
 
-    const { score, grade, findings, counts } = scoreScan({
+  const headerResults = checkHeaders(response.headers || {});
+  const cookieResults = checkCookies(response.headers['set-cookie']);
+  const contentResults = checkContent(html, parsed.href);
+
+  const { score, grade, findings, counts } = scoreScan({
+    headers: headerResults,
+    tls: tlsResults,
+    cookies: cookieResults,
+    content: contentResults,
+    cors: corsResults,
+    dns: dnsResults,
+    exposures: exposureResults,
+  });
+
+  return {
+    url: parsed.href,
+    hostname: normalizeHost(parsed.hostname),
+    scannedAt: new Date().toISOString(),
+    durationMs: Date.now() - scanStart,
+    httpStatus: response.status,
+    score,
+    grade,
+    counts,
+    findings,
+    details: {
       headers: headerResults,
       tls: tlsResults,
       cookies: cookieResults,
       content: contentResults,
-    });
+      cors: corsResults,
+      dns: dnsResults,
+      exposures: exposureResults,
+    },
+  };
+}
 
-    res.json({
-      url: parsed.href,
-      hostname: normalizeHost(parsed.hostname),
-      scannedAt: new Date().toISOString(),
-      durationMs: Date.now() - scanStart,
-      httpStatus: response.status,
-      score,
-      grade,
-      counts,
-      findings,
-      details: {
-        headers: headerResults,
-        tls: tlsResults,
-        cookies: cookieResults,
-        content: contentResults,
-      },
-    });
+router.post('/scan', async (req, res) => {
+  const { parsed, error } = validateAndAuthorize(req.body && req.body.url);
+  if (error) return res.status(error.status).json(error.body);
+
+  try {
+    const result = await runScan(parsed);
+    res.json(result);
   } catch (err) {
     res.status(502).json({ error: `Scan failed: ${err.message}` });
+  }
+});
+
+// Re-runs the scan and streams back a PDF instead of JSON. Re-scanning
+// rather than caching keeps this endpoint simple and always current;
+// scans are already fast enough (a handful of seconds) not to need caching.
+router.post('/scan/report.pdf', async (req, res) => {
+  const { parsed, error } = validateAndAuthorize(req.body && req.body.url);
+  if (error) return res.status(error.status).json(error.body);
+
+  try {
+    const result = await runScan(parsed);
+    const pdfBuffer = await generateReportPdf(result);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="security-report-${result.hostname}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (err) {
+    res.status(502).json({ error: `Report generation failed: ${err.message}` });
   }
 });
 

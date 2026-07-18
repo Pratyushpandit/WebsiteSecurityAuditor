@@ -25,7 +25,6 @@
 const ALLOWED_DOMAINS = [
   // Examples - replace with your actual deployed domains before use.
   // 'yourproject.netlify.app',
-  'esewa.com.np'
   // 'yourname.infinityfreeapp.com',
   // 'yourdomain.je',
 ];

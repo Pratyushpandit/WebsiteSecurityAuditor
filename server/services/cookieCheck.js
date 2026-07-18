@@ -13,6 +13,8 @@ function parseCookie(rawCookie) {
   const [nameValue] = parts;
   const [name] = nameValue.split('=');
   const attributes = parts.slice(1).map((p) => p.split('=')[0].toLowerCase());
+  const domainAttr = parts.find((p) => p.toLowerCase().startsWith('domain='));
+  const pathAttr = parts.find((p) => p.toLowerCase().startsWith('path='));
 
   return {
     name,
@@ -21,7 +23,31 @@ function parseCookie(rawCookie) {
     sameSite: attributes.includes('samesite')
       ? parts.find((p) => p.toLowerCase().startsWith('samesite')).split('=')[1] || '(no value)'
       : null,
+    hasDomain: !!domainAttr,
+    path: pathAttr ? pathAttr.split('=')[1] : '/',
   };
+}
+
+/**
+ * Cookies named with a __Host- or __Secure- prefix are a browser-enforced
+ * promise: if the prefix is used but the required attributes aren't
+ * actually set, browsers silently refuse to set the cookie at all -
+ * which usually manifests as a confusing login/session bug, not a
+ * security hole, but is worth flagging since it means the prefix is
+ * being used without understanding its requirements.
+ */
+function checkCookiePrefix(cookie) {
+  if (cookie.name.startsWith('__Host-')) {
+    const problems = [];
+    if (!cookie.secure) problems.push('missing Secure');
+    if (cookie.hasDomain) problems.push('has a Domain attribute (not allowed for __Host-)');
+    if (cookie.path !== '/') problems.push('Path is not "/" (required for __Host-)');
+    return problems.length ? problems : null;
+  }
+  if (cookie.name.startsWith('__Secure-')) {
+    return !cookie.secure ? ['missing Secure'] : null;
+  }
+  return null;
 }
 
 function checkCookies(setCookieHeader) {
@@ -42,6 +68,14 @@ function checkCookies(setCookieHeader) {
     }
     if (!c.sameSite) {
       issues.push({ cookie: c.name, severity: 'low', note: `Cookie "${c.name}" is missing the SameSite attribute (CSRF exposure).` });
+    }
+    const prefixProblems = checkCookiePrefix(c);
+    if (prefixProblems) {
+      issues.push({
+        cookie: c.name,
+        severity: 'medium',
+        note: `Cookie "${c.name}" uses a security-prefixed name but doesn't meet the prefix's requirements: ${prefixProblems.join(', ')}. Browsers will silently reject this cookie.`,
+      });
     }
   });
 

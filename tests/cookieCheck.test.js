@@ -24,3 +24,28 @@ test('never includes the cookie value in the parsed output', () => {
   const serialized = JSON.stringify(result);
   assert.ok(!serialized.includes('super-secret-token-value'));
 });
+
+test('flags a __Host- cookie missing Secure', () => {
+  const result = checkCookies(['__Host-session=abc; Path=/']);
+  const prefixIssue = result.issues.find((i) => i.note.includes('prefix'));
+  assert.ok(prefixIssue, 'expected a prefix-related issue');
+});
+
+test('flags a __Host- cookie with a Domain attribute (not allowed)', () => {
+  const result = checkCookies(['__Host-session=abc; Secure; Path=/; Domain=example.com']);
+  const prefixIssue = result.issues.find((i) => i.note.includes('prefix'));
+  assert.ok(prefixIssue);
+  assert.ok(prefixIssue.note.includes('Domain'));
+});
+
+test('does not flag a correctly-configured __Host- cookie', () => {
+  const result = checkCookies(['__Host-session=abc; Secure; Path=/; SameSite=Strict']);
+  const prefixIssue = result.issues.find((i) => i.note.includes('prefix'));
+  assert.strictEqual(prefixIssue, undefined);
+});
+
+test('flags a __Secure- cookie missing Secure', () => {
+  const result = checkCookies(['__Secure-token=abc']);
+  const prefixIssue = result.issues.find((i) => i.note.includes('prefix'));
+  assert.ok(prefixIssue);
+});

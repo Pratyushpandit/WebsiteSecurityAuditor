@@ -32,3 +32,21 @@ test('does not flag GET forms for missing csrf field', () => {
   const result = checkContent(html, 'https://example.com/');
   assert.strictEqual(result.formsWithoutCsrfToken, 0);
 });
+
+test('flags a cross-origin script with no integrity attribute', () => {
+  const html = '<script src="https://cdn.other-site.com/lib.js"></script>';
+  const result = checkContent(html, 'https://example.com/');
+  assert.strictEqual(result.missingIntegrityCount, 1);
+});
+
+test('does not flag a cross-origin script that has an integrity attribute', () => {
+  const html = '<script src="https://cdn.other-site.com/lib.js" integrity="sha384-abc123" crossorigin="anonymous"></script>';
+  const result = checkContent(html, 'https://example.com/');
+  assert.strictEqual(result.missingIntegrityCount, 0);
+});
+
+test('does not flag a same-origin script for missing integrity', () => {
+  const html = '<script src="/js/app.js"></script>';
+  const result = checkContent(html, 'https://example.com/');
+  assert.strictEqual(result.missingIntegrityCount, 0);
+});

@@ -31,19 +31,46 @@ whoever is logged into the UI.
 - **HTTP security headers** — HSTS, Content-Security-Policy,
   X-Content-Type-Options, X-Frame-Options, Referrer-Policy,
   Permissions-Policy, with a quality check (e.g. flags a CSP that still
-  allows `unsafe-inline`), not just presence/absence.
+  allows `unsafe-inline`), not just presence/absence. Every check
+  includes a plain-English explanation of what it does and why it
+  matters, not just a pass/fail.
 - **TLS / certificate** — protocol version, cipher, certificate trust
   and expiry, via a single ordinary TLS handshake.
-- **Cookies** — Secure / HttpOnly / SameSite flags. Cookie *values* are
-  never read, stored, or displayed — only flag presence.
-- **Content** — mixed content (HTTP resources on an HTTPS page) and a
+- **Cookies** — Secure / HttpOnly / SameSite flags, plus `__Host-` /
+  `__Secure-` prefix validation. Cookie *values* are never read, stored,
+  or displayed — only flag presence.
+- **Content** — mixed content (HTTP resources on an HTTPS page), a
   static heuristic for POST forms missing a CSRF-token-shaped hidden
-  field.
+  field, and Subresource Integrity (SRI) checks on cross-origin
+  `<script>` tags.
+- **CORS misconfiguration** — checks whether the server reflects an
+  arbitrary `Origin` back in `Access-Control-Allow-Origin` while also
+  allowing credentials, a combination that lets any website read this
+  site's authenticated API responses on a logged-in visitor's behalf.
+- **DNS / email security** — SPF, DMARC, and CAA records via ordinary
+  DNS lookups, flagging domains that are easy to spoof in phishing email
+  or that allow certificate issuance from any public CA.
+- **Exposed files & directories** — checks a small, fixed list of
+  well-known paths (`.git/HEAD`, `.env`, SQL backups, etc.) that should
+  never be publicly accessible. Every request is an ordinary GET to a
+  documented path — nothing is submitted and no authentication is
+  bypassed.
+- **Information disclosure** — flags `Server`/`X-Powered-By` headers
+  that reveal specific software versions.
 
 None of these checks submit forms, send alternate/malicious parameters,
-or attempt to exploit anything. Each scan makes exactly one GET request
-plus one TLS handshake to the target — the same footprint as a browser
-loading the page once.
+or attempt to exploit anything. A scan makes a small, fixed number of
+ordinary GET requests plus one TLS handshake and a few DNS lookups —
+comparable to what a browser does loading the page plus a handful of
+standard reconnaissance queries.
+
+## PDF reports
+
+Every scan result can be exported as a PDF via the **Download PDF
+Report** button (or `POST /api/scan/report.pdf`). The report includes
+the grade, a severity-scale explanation, and every finding with its
+plain-English explanation and remediation step — formatted to send
+directly to a site owner or attach to a bug bounty submission.
 
 ## Screenshots
 
@@ -52,11 +79,17 @@ ever lists domains from the server-side allowlist:
 
 ![Empty state](screenshots/dashboard_empty_state.png)
 
-**Scan results** — grade, severity-sorted findings with remediation
-advice, and a detail breakdown per check category (shown here with
-illustrative sample data):
+**Scan results** — grade, severity-sorted findings with plain-English
+explanations and remediation advice, and a "Download PDF Report" button
+(shown here with illustrative sample data, since this environment has
+no live deployed site of mine to scan against for the screenshot):
 
 ![Report view](screenshots/dashboard_report_view.png)
+
+**Check details** — a per-category breakdown (headers, TLS, cookies,
+content, CORS, DNS/email security, exposed files):
+
+![Detail cards](screenshots/dashboard_detail_cards.png)
 
 ## Project structure
 
@@ -68,18 +101,22 @@ website-security-auditor/
 │   │   └── allowlist.js       # THE authorization boundary - edit this to add domains
 │   ├── services/
 │   │   ├── httpFetch.js       # single passive GET request
-│   │   ├── headerCheck.js     # security header analysis
+│   │   ├── headerCheck.js     # security header analysis + version disclosure
 │   │   ├── tlsCheck.js        # TLS/certificate analysis
-│   │   ├── cookieCheck.js     # cookie flag analysis
-│   │   ├── contentCheck.js    # mixed content + CSRF field heuristic
-│   │   └── scoring.js         # aggregates checks into a grade + findings
+│   │   ├── cookieCheck.js     # cookie flag + prefix analysis
+│   │   ├── contentCheck.js    # mixed content, CSRF field heuristic, SRI
+│   │   ├── corsCheck.js       # CORS misconfiguration detection
+│   │   ├── dnsCheck.js        # SPF/DMARC/CAA lookups
+│   │   ├── exposureCheck.js   # sensitive file/directory exposure
+│   │   ├── scoring.js         # aggregates checks into a grade + findings
+│   │   └── pdfReport.js       # renders a scan result to a PDF report
 │   └── routes/
-│       └── scan.js            # /api/scan, /api/allowed-domains
+│       └── scan.js            # /api/scan, /api/scan/report.pdf, /api/allowed-domains
 ├── public/
 │   ├── index.html
 │   ├── css/style.css
 │   └── js/app.js
-├── tests/                     # 23 unit tests (Node's built-in test runner)
+├── tests/                     # 39 unit tests (Node's built-in test runner)
 ├── screenshots/
 ├── package.json
 └── README.md
@@ -141,23 +178,50 @@ with no request ever sent to that domain:
 }
 ```
 
+To get a PDF report directly from the API:
+
+```bash
+curl -X POST http://localhost:3000/api/scan/report.pdf \
+  -H "Content-Type: application/json" \
+  -d '{"url": "https://yourproject.netlify.app"}' \
+  -o report.pdf
+```
+
 ## Running the tests
 
 ```bash
 npm test
 ```
 
-23 tests covering the allowlist gate, each check module, and the
-scoring/grading engine.
+39 tests covering the allowlist gate, each check module (including
+cookie prefix validation and Subresource Integrity detection), the PDF
+report generator, and the scoring/grading engine.
 
 ## Grading
 
-Each finding has a severity (critical/high/medium/low) with a fixed
-point deduction from a 100-point baseline: critical −25, high −15,
-medium −8, low −3. The resulting score maps to a letter grade (A ≥ 90,
-B ≥ 80, C ≥ 65, D ≥ 50, F below). The weights live in
+Each finding has a severity — Critical, High, Medium, or Low, the same
+four working tiers used by CVSS and every major bug bounty program —
+with a fixed point deduction from a 100-point baseline: critical −30,
+high −15, medium −8, low −3. The resulting score maps to a letter grade
+(A ≥ 90, B ≥ 80, C ≥ 65, D ≥ 50, F below). The weights live in
 `server/services/scoring.js` and are intentionally simple and
 documented, not a black box.
+
+## On bug bounty use
+
+This tool surfaces real, legitimate findings — and on a genuinely
+neglected target, some of them (an exposed `.env` file, a broken CORS
+config) can be Critical by any standard definition. But it's worth being
+direct about what this class of tool can and can't do: automated
+scanner output is extremely common in bug bounty programs, and most
+programs explicitly deprioritize findings a scanner could have produced
+a year ago (missing headers, version disclosure) in favor of things a
+scanner structurally cannot find — broken authorization logic, business
+logic flaws, auth bypasses — which require manually reading and
+understanding the specific application. This tool is a solid recon/audit
+layer and a legitimate portfolio piece, not a shortcut to payouts on its
+own. Always read a program's scope and rules of engagement before
+testing anything, regardless of how "passive" a check is.
 
 ## Deploying
 
@@ -172,6 +236,6 @@ if you'd rather not publish which sites you're monitoring (add it to
 
 - Scheduled re-scans with historical grade tracking per domain
 - Email/webhook alert when a previously-passing check starts failing
-- Export a PDF/CSV report per scan
+- CSV export alongside the existing PDF report
 - A DNS TXT-record verification flow if this ever needs to support
   self-service domain addition instead of a hardcoded list

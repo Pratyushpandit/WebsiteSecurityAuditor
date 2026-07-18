@@ -52,12 +52,34 @@ function checkContent(html, pageUrl) {
     });
   });
 
+  // Subresource Integrity: cross-origin scripts without an `integrity`
+  // attribute will execute unmodified if that third-party host (a CDN,
+  // typically) is ever compromised - the browser has no way to verify
+  // the file it downloaded is the one the page author intended.
+  let pageOrigin = null;
+  try { pageOrigin = new URL(pageUrl).origin; } catch { /* leave null */ }
+
+  const missingIntegrity = [];
+  $('script[src]').each((_, el) => {
+    const src = $(el).attr('src');
+    if (!src) return;
+    let scriptOrigin = null;
+    try { scriptOrigin = new URL(src, pageUrl).origin; } catch { return; }
+    const isCrossOrigin = pageOrigin && scriptOrigin !== pageOrigin;
+    const hasIntegrity = !!$(el).attr('integrity');
+    if (isCrossOrigin && !hasIntegrity) {
+      missingIntegrity.push(src);
+    }
+  });
+
   return {
     isHttps,
     mixedContent,
     mixedContentCount: mixedContent.length,
     forms: formResults,
     formsWithoutCsrfToken: formResults.filter((f) => f.method === 'POST' && !f.hasCsrfField).length,
+    missingIntegrity,
+    missingIntegrityCount: missingIntegrity.length,
   };
 }
 

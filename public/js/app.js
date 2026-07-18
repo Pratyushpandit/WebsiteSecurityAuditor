@@ -1,5 +1,6 @@
 const scopeList = document.getElementById('scope-list');
 const scanButton = document.getElementById('scan-button');
+const pdfButton = document.getElementById('pdf-button');
 const aboutToggle = document.getElementById('about-toggle');
 const aboutBody = document.getElementById('about-body');
 
@@ -11,6 +12,7 @@ const reportCard = document.getElementById('report-card');
 
 let selectedDomain = null;
 let allowedDomains = [];
+let lastScannedUrl = null;
 
 aboutToggle.addEventListener('click', () => {
   const hidden = aboutBody.hasAttribute('hidden');
@@ -86,12 +88,49 @@ scanButton.addEventListener('click', async () => {
     }
 
     renderReport(data);
+    lastScannedUrl = `https://${selectedDomain}`;
     setView('report');
   } catch (err) {
     errorState.textContent = err.message;
     setView('error');
   } finally {
     scanButton.disabled = false;
+  }
+});
+
+pdfButton.addEventListener('click', async () => {
+  if (!lastScannedUrl) return;
+
+  pdfButton.disabled = true;
+  const originalText = pdfButton.textContent;
+  pdfButton.textContent = 'Generating…';
+
+  try {
+    const res = await fetch('/api/scan/report.pdf', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: lastScannedUrl }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || 'Report generation failed.');
+    }
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `security-report-${selectedDomain}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(err.message);
+  } finally {
+    pdfButton.disabled = false;
+    pdfButton.textContent = originalText;
   }
 });
 
@@ -127,6 +166,7 @@ function renderReport(data) {
           <span class="finding-category">${escapeHtml(f.category)}</span>
         </div>
         <div class="finding-detail">${escapeHtml(f.detail)}</div>
+        ${f.explanation ? `<div class="finding-explanation">${escapeHtml(f.explanation)}</div>` : ''}
         ${f.remediation ? `<div class="finding-remediation">${escapeHtml(f.remediation)}</div>` : ''}
       `;
       findingsList.appendChild(div);
@@ -189,8 +229,56 @@ function renderDetailGrid(details) {
   contentCard.innerHTML = `<h3>Content</h3>` +
     `<div class="detail-row"><span class="k">Mixed content resources</span><span class="v ${details.content.mixedContentCount === 0 ? 'pass' : 'fail'}">${details.content.mixedContentCount}</span></div>` +
     `<div class="detail-row"><span class="k">Forms found</span><span class="v">${details.content.forms.length}</span></div>` +
-    `<div class="detail-row"><span class="k">POST forms without CSRF field</span><span class="v ${details.content.formsWithoutCsrfToken === 0 ? 'pass' : 'fail'}">${details.content.formsWithoutCsrfToken}</span></div>`;
+    `<div class="detail-row"><span class="k">POST forms without CSRF field</span><span class="v ${details.content.formsWithoutCsrfToken === 0 ? 'pass' : 'fail'}">${details.content.formsWithoutCsrfToken}</span></div>` +
+    `<div class="detail-row"><span class="k">Scripts missing SRI</span><span class="v ${details.content.missingIntegrityCount === 0 ? 'pass' : 'fail'}">${details.content.missingIntegrityCount}</span></div>`;
   grid.appendChild(contentCard);
+
+  // CORS card
+  const corsCard = document.createElement('div');
+  corsCard.className = 'detail-card';
+  if (!details.cors || details.cors.error) {
+    corsCard.innerHTML = `<h3>CORS</h3><div class="detail-row"><span class="k">${escapeHtml((details.cors && details.cors.error) || 'Not checked')}</span></div>`;
+  } else {
+    corsCard.innerHTML = `<h3>CORS</h3>` +
+      `<div class="detail-row"><span class="k">CORS enabled</span><span class="v">${details.cors.corsEnabled ? 'YES' : 'NO'}</span></div>` +
+      (details.cors.corsEnabled
+        ? `<div class="detail-row"><span class="k">Allow-Origin reflects requester</span><span class="v ${details.cors.reflectsArbitraryOrigin ? 'fail' : 'pass'}">${details.cors.reflectsArbitraryOrigin ? 'YES' : 'NO'}</span></div>` +
+          `<div class="detail-row"><span class="k">Allows credentials</span><span class="v ${details.cors.allowsCredentials ? 'fail' : 'pass'}">${details.cors.allowsCredentials ? 'YES' : 'NO'}</span></div>`
+        : '');
+  }
+  grid.appendChild(corsCard);
+
+  // DNS / Email security card
+  const dnsCard = document.createElement('div');
+  dnsCard.className = 'detail-card';
+  if (details.dns) {
+    dnsCard.innerHTML = `<h3>DNS / Email Security</h3>` +
+      `<div class="detail-row"><span class="k">SPF record</span><span class="v ${details.dns.spf.present ? 'pass' : 'fail'}">${details.dns.spf.present ? 'PRESENT' : 'MISSING'}</span></div>` +
+      `<div class="detail-row"><span class="k">DMARC record</span><span class="v ${details.dns.dmarc.present ? 'pass' : 'fail'}">${details.dns.dmarc.present ? 'PRESENT' : 'MISSING'}</span></div>` +
+      (details.dns.dmarc.present
+        ? `<div class="detail-row"><span class="k">DMARC enforcing</span><span class="v ${details.dns.dmarc.isEnforcing ? 'pass' : 'fail'}">${details.dns.dmarc.isEnforcing ? 'YES' : 'NO (p=' + escapeHtml(details.dns.dmarc.policy) + ')'}</span></div>`
+        : '') +
+      `<div class="detail-row"><span class="k">CAA record</span><span class="v ${details.dns.caa.present ? 'pass' : 'fail'}">${details.dns.caa.present ? 'PRESENT' : 'MISSING'}</span></div>`;
+  }
+  grid.appendChild(dnsCard);
+
+  // Exposed files card
+  const exposureCard = document.createElement('div');
+  exposureCard.className = 'detail-card';
+  if (details.exposures) {
+    const exposedCount = details.exposures.exposed.length;
+    exposureCard.innerHTML = `<h3>Exposed Files (${details.exposures.checked} paths checked)</h3>` +
+      (exposedCount === 0
+        ? '<div class="detail-row"><span class="k">No sensitive files found exposed</span><span class="v pass">CLEAN</span></div>'
+        : details.exposures.exposed.map((e) => `
+            <div class="detail-row">
+              <span class="k">${escapeHtml(e.path)}</span>
+              <span class="v fail">EXPOSED</span>
+            </div>
+          `).join(''));
+  }
+  exposureCard.style.flex = '1 1 100%';
+  grid.appendChild(exposureCard);
 }
 
 function escapeHtml(str) {
