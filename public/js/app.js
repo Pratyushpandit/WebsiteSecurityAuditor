@@ -279,6 +279,70 @@ function renderDetailGrid(details) {
   }
   exposureCard.style.flex = '1 1 100%';
   grid.appendChild(exposureCard);
+
+  // Subdomain takeover card
+  if (details.takeover) {
+    const takeoverCard = document.createElement('div');
+    takeoverCard.className = 'detail-card';
+    if (!details.takeover.hasCname) {
+      takeoverCard.innerHTML = `<h3>Subdomain Takeover</h3><div class="detail-row"><span class="k">No CNAME record (not applicable)</span></div>`;
+    } else {
+      takeoverCard.innerHTML = `<h3>Subdomain Takeover</h3>` +
+        `<div class="detail-row"><span class="k">CNAME target</span><span class="v">${escapeHtml(details.takeover.cname)}</span></div>` +
+        `<div class="detail-row"><span class="k">Matched service</span><span class="v">${escapeHtml(details.takeover.matchedService || 'none')}</span></div>` +
+        `<div class="detail-row"><span class="k">Vulnerable</span><span class="v ${details.takeover.vulnerable ? 'fail' : 'pass'}">${details.takeover.vulnerable ? 'YES' : 'NO'}</span></div>`;
+    }
+    grid.appendChild(takeoverCard);
+  }
+
+  // HTTP methods card
+  if (details.httpMethods) {
+    const methodsCard = document.createElement('div');
+    methodsCard.className = 'detail-card';
+    if (!details.httpMethods.checked) {
+      methodsCard.innerHTML = `<h3>HTTP Methods</h3><div class="detail-row"><span class="k">${escapeHtml(details.httpMethods.error || 'Not checked')}</span></div>`;
+    } else {
+      methodsCard.innerHTML = `<h3>HTTP Methods</h3>` +
+        `<div class="detail-row"><span class="k">Allow header</span><span class="v">${escapeHtml(details.httpMethods.allowHeader || '(none returned)')}</span></div>` +
+        `<div class="detail-row"><span class="k">Risky methods enabled</span><span class="v ${details.httpMethods.riskyMethodsAllowed.length ? 'fail' : 'pass'}">${details.httpMethods.riskyMethodsAllowed.length ? details.httpMethods.riskyMethodsAllowed.join(', ') : 'NONE'}</span></div>`;
+    }
+    grid.appendChild(methodsCard);
+  }
+
+  // Directory listing + DNSSEC combined card
+  if (details.directoryListing || details.dnssec) {
+    const miscCard = document.createElement('div');
+    miscCard.className = 'detail-card';
+    let inner = '<h3>Directory Listing &amp; DNSSEC</h3>';
+    if (details.directoryListing) {
+      inner += `<div class="detail-row"><span class="k">Paths checked</span><span class="v">${details.directoryListing.checked}</span></div>`;
+      inner += `<div class="detail-row"><span class="k">Listings exposed</span><span class="v ${details.directoryListing.exposed.length ? 'fail' : 'pass'}">${details.directoryListing.exposed.length}</span></div>`;
+    }
+    if (details.dnssec) {
+      inner += details.dnssec.checked
+        ? `<div class="detail-row"><span class="k">DNSSEC enabled</span><span class="v ${details.dnssec.enabled ? 'pass' : 'fail'}">${details.dnssec.enabled ? 'YES' : 'NO'}</span></div>`
+        : `<div class="detail-row"><span class="k">DNSSEC check</span><span class="v">${escapeHtml(details.dnssec.error || 'not checked')}</span></div>`;
+    }
+    miscCard.innerHTML = inner;
+    grid.appendChild(miscCard);
+  }
+
+  // Certificate Transparency card
+  if (details.certTransparency) {
+    const ctCard = document.createElement('div');
+    ctCard.className = 'detail-card';
+    ctCard.style.flex = '1 1 100%';
+    if (!details.certTransparency.checked) {
+      ctCard.innerHTML = `<h3>Certificate Transparency</h3><div class="detail-row"><span class="k">${escapeHtml(details.certTransparency.error || 'Not checked')}</span></div>`;
+    } else {
+      const subs = details.certTransparency.discoveredSubdomains;
+      ctCard.innerHTML = `<h3>Certificate Transparency (${details.certTransparency.certificateCount} certs on record)</h3>` +
+        (subs.length === 0
+          ? '<div class="detail-row"><span class="k">No additional subdomains discovered</span></div>'
+          : `<div class="detail-row"><span class="k">${subs.length} subdomain(s) found</span><span class="v">${subs.slice(0, 8).map(escapeHtml).join(', ')}${subs.length > 8 ? ', ...' : ''}</span></div>`);
+    }
+    grid.appendChild(ctCard);
+  }
 }
 
 function escapeHtml(str) {

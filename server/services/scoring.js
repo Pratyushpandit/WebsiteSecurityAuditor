@@ -24,7 +24,7 @@ function gradeFromScore(score) {
   return 'F';
 }
 
-function buildFindings({ headers, tls, cookies, content, cors, dns, exposures }) {
+function buildFindings({ headers, tls, cookies, content, cors, dns, exposures, takeover, httpMethods, directoryListing, dnssec, certTransparency }) {
   const findings = [];
 
   // ---- HTTP Headers ----
@@ -227,6 +227,71 @@ function buildFindings({ headers, tls, cookies, content, cors, dns, exposures })
         explanation: 'This file is sitting on the public web server, readable by anyone who requests it directly - no authentication bypass or exploitation involved, it was simply never restricted.',
         remediation: `Remove or block public access to ${e.path} at the web server/proxy level, and rotate any credentials it may have exposed.`,
       });
+    });
+  }
+
+  // ---- Subdomain takeover ----
+  if (takeover && takeover.vulnerable) {
+    findings.push({
+      category: 'Subdomain Takeover',
+      title: `Possible subdomain takeover via ${takeover.matchedService}`,
+      severity: 'critical',
+      detail: `CNAME points to ${takeover.cname}, which currently returns an "unclaimed resource" response from ${takeover.matchedService}.`,
+      explanation: 'This DNS record points at a third-party service resource that appears to no longer exist. If confirmed, anyone could register that resource on the provider and serve their own content - including phishing pages or malware - from this trusted domain.',
+      remediation: `Remove the dangling CNAME record if it's no longer needed, or re-claim/re-create the ${takeover.matchedService} resource it points to.`,
+    });
+  }
+
+  // ---- HTTP methods ----
+  if (httpMethods && httpMethods.checked && httpMethods.riskyMethodsAllowed.length > 0) {
+    const hasTrace = httpMethods.riskyMethodsAllowed.includes('TRACE');
+    findings.push({
+      category: 'HTTP Methods',
+      title: `Potentially risky HTTP method(s) enabled: ${httpMethods.riskyMethodsAllowed.join(', ')}`,
+      severity: hasTrace ? 'high' : 'medium',
+      detail: `Allow header: ${httpMethods.allowHeader}`,
+      explanation: hasTrace
+        ? 'TRACE enables Cross-Site Tracing (XST), a technique that can be used to read cookies and headers even when they are marked HttpOnly, by reflecting the raw request back in the response.'
+        : 'PUT/DELETE/CONNECT being generally enabled increases the impact if any other access-control bug exists elsewhere on the server, since these methods can create or destroy resources rather than just read them.',
+      remediation: 'Disable unused HTTP methods at the web server or reverse proxy level, leaving only GET/HEAD/POST/OPTIONS unless a specific route genuinely needs more.',
+    });
+  }
+
+  // ---- Directory listing ----
+  if (directoryListing && directoryListing.exposed.length > 0) {
+    findings.push({
+      category: 'Directory Listing',
+      title: `Directory listing enabled on ${directoryListing.exposed.length} path(s)`,
+      severity: 'medium',
+      detail: `Exposed: ${directoryListing.exposed.map((d) => d.path).join(', ')}`,
+      explanation: 'An open directory listing shows every file in that folder, including ones never linked from anywhere on the site - giving an attacker a free map of files that were assumed to be hidden by obscurity.',
+      remediation: 'Disable directory listing/autoindex in the web server configuration (e.g. "Options -Indexes" in Apache, "autoindex off;" in Nginx).',
+    });
+  }
+
+  // ---- DNSSEC ----
+  if (dnssec && dnssec.checked && !dnssec.enabled) {
+    findings.push({
+      category: 'DNS / Email Security',
+      title: 'DNSSEC is not enabled',
+      severity: 'low',
+      detail: 'No DNSKEY record was found for this domain.',
+      explanation: "Without DNSSEC, this domain's DNS responses can't be cryptographically verified, making DNS cache-poisoning and spoofing attacks against its visitors somewhat easier.",
+      remediation: 'Enable DNSSEC signing through your DNS provider/registrar. Many registrars support this with a single toggle.',
+    });
+  }
+
+  // Certificate Transparency is informational recon, not a vulnerability
+  // by itself - it never contributes to the score, it's surfaced purely
+  // to help an owner notice forgotten subdomains.
+  if (certTransparency && certTransparency.checked && certTransparency.discoveredSubdomains.length > 0) {
+    findings.push({
+      category: 'Information Disclosure',
+      title: `${certTransparency.discoveredSubdomains.length} subdomain(s) discovered via public certificate logs`,
+      severity: 'info',
+      detail: certTransparency.discoveredSubdomains.slice(0, 10).join(', ') + (certTransparency.discoveredSubdomains.length > 10 ? ', ...' : ''),
+      explanation: 'Certificate Transparency logs are public by design, so this information is already visible to anyone who queries them - it is included here so you can review whether any of these subdomains are forgotten, unmaintained, or should be decommissioned.',
+      remediation: 'Review the list for anything unexpected. Decommission and remove DNS records for subdomains that are no longer in use.',
     });
   }
 

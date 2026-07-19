@@ -92,3 +92,81 @@ test('no exposed files produces no Exposed Files findings', () => {
   const { findings } = scoreScan(baseline({ exposures: { checked: 12, exposed: [], info: [] } }));
   assert.strictEqual(findings.filter((f) => f.category === 'Exposed Files').length, 0);
 });
+
+test('a confirmed subdomain takeover is a critical finding', () => {
+  const { findings, grade } = scoreScan(
+    baseline({ takeover: { hasCname: true, cname: 'old-app.herokuapp.com', matchedService: 'Heroku', vulnerable: true } })
+  );
+  const takeoverFinding = findings.find((f) => f.category === 'Subdomain Takeover');
+  assert.ok(takeoverFinding);
+  assert.strictEqual(takeoverFinding.severity, 'critical');
+  assert.notStrictEqual(grade, 'A');
+});
+
+test('a CNAME to a known service that is NOT vulnerable produces no finding', () => {
+  const { findings } = scoreScan(
+    baseline({ takeover: { hasCname: true, cname: 'myapp.herokuapp.com', matchedService: 'Heroku', vulnerable: false } })
+  );
+  assert.strictEqual(findings.filter((f) => f.category === 'Subdomain Takeover').length, 0);
+});
+
+test('TRACE method enabled is a high severity finding', () => {
+  const { findings } = scoreScan(
+    baseline({ httpMethods: { checked: true, allowHeader: 'GET, POST, TRACE', riskyMethodsAllowed: ['TRACE'] } })
+  );
+  const methodFinding = findings.find((f) => f.category === 'HTTP Methods');
+  assert.ok(methodFinding);
+  assert.strictEqual(methodFinding.severity, 'high');
+});
+
+test('PUT/DELETE enabled without TRACE is a medium severity finding', () => {
+  const { findings } = scoreScan(
+    baseline({ httpMethods: { checked: true, allowHeader: 'GET, POST, PUT, DELETE', riskyMethodsAllowed: ['PUT', 'DELETE'] } })
+  );
+  const methodFinding = findings.find((f) => f.category === 'HTTP Methods');
+  assert.ok(methodFinding);
+  assert.strictEqual(methodFinding.severity, 'medium');
+});
+
+test('no risky methods allowed produces no HTTP Methods finding', () => {
+  const { findings } = scoreScan(
+    baseline({ httpMethods: { checked: true, allowHeader: 'GET, POST, HEAD, OPTIONS', riskyMethodsAllowed: [] } })
+  );
+  assert.strictEqual(findings.filter((f) => f.category === 'HTTP Methods').length, 0);
+});
+
+test('an exposed directory listing is a medium finding', () => {
+  const { findings } = scoreScan(
+    baseline({ directoryListing: { checked: 8, exposed: [{ path: '/uploads/', exposed: true, status: 200 }] } })
+  );
+  const listingFinding = findings.find((f) => f.category === 'Directory Listing');
+  assert.ok(listingFinding);
+  assert.strictEqual(listingFinding.severity, 'medium');
+});
+
+test('no directory listings exposed produces no finding', () => {
+  const { findings } = scoreScan(baseline({ directoryListing: { checked: 8, exposed: [] } }));
+  assert.strictEqual(findings.filter((f) => f.category === 'Directory Listing').length, 0);
+});
+
+test('DNSSEC not enabled is a low severity finding', () => {
+  const { findings } = scoreScan(baseline({ dnssec: { checked: true, enabled: false } }));
+  const dnssecFinding = findings.find((f) => f.title.includes('DNSSEC'));
+  assert.ok(dnssecFinding);
+  assert.strictEqual(dnssecFinding.severity, 'low');
+});
+
+test('DNSSEC enabled produces no finding', () => {
+  const { findings } = scoreScan(baseline({ dnssec: { checked: true, enabled: true, validated: true } }));
+  assert.strictEqual(findings.filter((f) => f.title.includes('DNSSEC')).length, 0);
+});
+
+test('discovered subdomains via CT logs are informational and do not affect the score', () => {
+  const { findings, score } = scoreScan(
+    baseline({ certTransparency: { checked: true, certificateCount: 5, discoveredSubdomains: ['staging.example.com', 'old-admin.example.com'] } })
+  );
+  const ctFinding = findings.find((f) => f.category === 'Information Disclosure');
+  assert.ok(ctFinding);
+  assert.strictEqual(ctFinding.severity, 'info');
+  assert.strictEqual(score, 100); // info-severity findings carry 0 weight
+});

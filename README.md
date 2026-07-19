@@ -57,12 +57,47 @@ whoever is logged into the UI.
   bypassed.
 - **Information disclosure** — flags `Server`/`X-Powered-By` headers
   that reveal specific software versions.
+- **Subdomain takeover** — checks whether this hostname's CNAME points
+  at a third-party service (GitHub Pages, Heroku, S3, Netlify, etc.)
+  that's currently returning an "unclaimed resource" response — the
+  signature of a real, confirmed takeover vulnerability, where an
+  attacker could register the abandoned resource and serve content from
+  a trusted domain.
+- **HTTP method enumeration** — a single OPTIONS request checking
+  whether PUT/DELETE/TRACE/CONNECT are enabled unnecessarily. TRACE
+  specifically enables Cross-Site Tracing, a technique that can leak
+  HttpOnly cookies.
+- **Directory listing detection** — checks common paths for an exposed
+  auto-generated "Index of /" listing.
+- **DNSSEC** — checks whether DNS responses for the domain can be
+  cryptographically verified, via a DNS-over-HTTPS lookup (Node's
+  built-in DNS module doesn't support the DNSKEY record type).
+- **Certificate Transparency** — queries the public crt.sh log for
+  every certificate ever issued for the domain, which often surfaces
+  forgotten subdomains (`staging.`, `old-admin.`, etc.) nobody
+  remembers exist. This is informational recon, not a vulnerability by
+  itself, so it never affects the score.
 
 None of these checks submit forms, send alternate/malicious parameters,
 or attempt to exploit anything. A scan makes a small, fixed number of
-ordinary GET requests plus one TLS handshake and a few DNS lookups —
-comparable to what a browser does loading the page plus a handful of
-standard reconnaissance queries.
+ordinary GET/OPTIONS requests, one TLS handshake, a few DNS lookups, and
+two read-only queries to public third-party infrastructure (a DNS-over-
+HTTPS resolver and the crt.sh certificate log) — comparable to what a
+browser does loading the page plus a handful of standard reconnaissance
+queries.
+
+### Where the scope boundary is, on purpose
+
+This project deliberately stops at passive reconnaissance and does not
+include active testing — sending crafted or malicious input and
+observing how the application responds (injection payloads, auth
+bypass attempts, parameter fuzzing, forced browsing past access
+controls). That's a firm line, not an oversight: a tool with active
+capability can't tell an authorized target from an unauthorized one
+once it leaves this codebase, and every check listed above was chosen
+specifically because it stays on the safe side of that line while still
+surfacing findings with genuine, confirmed impact (subdomain takeover
+and CORS misconfiguration in particular).
 
 ## PDF reports
 
@@ -108,6 +143,11 @@ website-security-auditor/
 │   │   ├── corsCheck.js       # CORS misconfiguration detection
 │   │   ├── dnsCheck.js        # SPF/DMARC/CAA lookups
 │   │   ├── exposureCheck.js   # sensitive file/directory exposure
+│   │   ├── subdomainTakeover.js  # dangling CNAME / takeover detection
+│   │   ├── httpMethods.js     # risky HTTP method enumeration
+│   │   ├── directoryListing.js   # exposed directory listing detection
+│   │   ├── dnssecCheck.js     # DNSSEC configuration check
+│   │   ├── certTransparency.js   # public CT log subdomain discovery
 │   │   ├── scoring.js         # aggregates checks into a grade + findings
 │   │   └── pdfReport.js       # renders a scan result to a PDF report
 │   └── routes/
@@ -193,9 +233,11 @@ curl -X POST http://localhost:3000/api/scan/report.pdf \
 npm test
 ```
 
-39 tests covering the allowlist gate, each check module (including
+49 tests covering the allowlist gate, each check module (including
 cookie prefix validation and Subresource Integrity detection), the PDF
-report generator, and the scoring/grading engine.
+report generator, and the scoring/grading engine — including scoring
+coverage for the subdomain takeover, HTTP methods, directory listing,
+DNSSEC, and certificate transparency findings.
 
 ## Grading
 

@@ -21,6 +21,11 @@ const { checkContent } = require('../services/contentCheck');
 const { checkCors } = require('../services/corsCheck');
 const { checkDns } = require('../services/dnsCheck');
 const { checkExposures } = require('../services/exposureCheck');
+const { checkSubdomainTakeover } = require('../services/subdomainTakeover');
+const { checkHttpMethods } = require('../services/httpMethods');
+const { checkDirectoryListing } = require('../services/directoryListing');
+const { checkDnssec } = require('../services/dnssecCheck');
+const { checkCertTransparency } = require('../services/certTransparency');
 const { scoreScan } = require('../services/scoring');
 const { generateReportPdf } = require('../services/pdfReport');
 
@@ -69,13 +74,28 @@ async function runScan(parsed) {
   const response = await fetchPage(parsed.href);
   const html = typeof response.data === 'string' ? response.data : '';
 
-  const [tlsResults, corsResults, dnsResults, exposureResults] = await Promise.all([
+  const [
+    tlsResults,
+    corsResults,
+    dnsResults,
+    exposureResults,
+    takeoverResults,
+    httpMethodsResults,
+    directoryListingResults,
+    dnssecResults,
+    certTransparencyResults,
+  ] = await Promise.all([
     parsed.protocol === 'https:'
       ? checkTls(parsed.hostname)
       : Promise.resolve({ error: 'Site was loaded over plain HTTP - no TLS to inspect. Serving the site over HTTPS is itself a high-severity recommendation.' }),
     checkCors(parsed.href),
     checkDns(parsed.hostname),
     checkExposures(parsed.origin),
+    checkSubdomainTakeover(parsed.hostname, html),
+    checkHttpMethods(parsed.href),
+    checkDirectoryListing(parsed.origin),
+    checkDnssec(parsed.hostname),
+    checkCertTransparency(parsed.hostname),
   ]);
 
   const headerResults = checkHeaders(response.headers || {});
@@ -90,6 +110,11 @@ async function runScan(parsed) {
     cors: corsResults,
     dns: dnsResults,
     exposures: exposureResults,
+    takeover: takeoverResults,
+    httpMethods: httpMethodsResults,
+    directoryListing: directoryListingResults,
+    dnssec: dnssecResults,
+    certTransparency: certTransparencyResults,
   });
 
   return {
@@ -110,6 +135,11 @@ async function runScan(parsed) {
       cors: corsResults,
       dns: dnsResults,
       exposures: exposureResults,
+      takeover: takeoverResults,
+      httpMethods: httpMethodsResults,
+      directoryListing: directoryListingResults,
+      dnssec: dnssecResults,
+      certTransparency: certTransparencyResults,
     },
   };
 }
